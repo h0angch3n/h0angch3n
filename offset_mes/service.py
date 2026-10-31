@@ -1,7 +1,8 @@
-"""Nghiệp vụ xưởng in: khách hàng, kho giấy, máy in, báo giá, đơn hàng, lịch máy, hóa đơn.
+"""Nghiệp vụ xưởng in: người dùng, khách hàng, kho giấy, máy in, báo giá, đơn hàng,
+tiến trình sản xuất (checklist theo công đoạn), lịch máy, hóa đơn.
 
-Lưu trữ bằng SQLite (thư viện chuẩn). Mọi thao tác đi qua lớp Service để
-đảm bảo quy tắc nghiệp vụ (kiểm tra tồn kho, chuyển trạng thái, số màu máy...).
+Lưu trữ bằng SQLite (thư viện chuẩn). Quy tắc nghiệp vụ nằm ở đây; phân quyền
+theo vai trò được kiểm tra ở lớp API (server.py).
 """
 from __future__ import annotations
 
@@ -10,12 +11,29 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 
-from . import calc
+from . import auth, calc
 from .workflow import STATUSES, TRANSITIONS, InvalidTransition, ensure_transition
+
+# Công đoạn mặc định: (trạng thái đơn chứa bước, tên bước). Có thể sửa trong Quy trình.
+DEFAULT_TEMPLATE: list[tuple[str, str]] = [
+    ("PREPRESS", "Kiểm tra file & chốt proof với khách"),
+    ("PREPRESS", "Xếp khung in (imposition)"),
+    ("PLATE", "Xuất và làm bản kẽm"),
+    ("PRINTING", "Chạy thử & căn màu"),
+    ("PRINTING", "In hàng loạt"),
+    ("FINISHING", "Cắt / bế"),
+    ("FINISHING", "Gấp / đóng quyển / cán màng"),
+    ("QC", "Kiểm tra chất lượng theo mẫu duyệt"),
+    ("READY", "Đóng gói, dán nhãn"),
+]
+TEMPLATE_STAGES = [s for s in STATUSES if s not in ("NEW", "CLOSED", "CANCELLED")]
+# Chuyển ngược để làm lại: không bị cổng tiến trình chặn.
+REWORK_TRANSITIONS = {("QC", "FINISHING")}
+TERMINAL = {"CLOSED", "CANCELLED"}
 
 
 class DomainError(Exception):
-    """Lỗi nghiệp vụ; server map sang HTTP 400/404/409 tùy `code`."""
+    """Lỗi nghiệp vụ; server map sang HTTP 400/401/403/404/409."""
 
     def __init__(self, message: str, code: int = 400):
         super().__init__(message)
@@ -23,6 +41,15 @@ class DomainError(Exception):
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    full_name TEXT,
+    role TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS customers (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -47,9 +74,14 @@ CREATE TABLE IF NOT EXISTS machines (
     makeready_hours REAL NOT NULL DEFAULT 0.5,
     available_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS plate_price (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    price REAL NOT NULL
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS process_template (
+    seq INTEGER PRIMARY KEY,
+    stage TEXT NOT NULL,
+    name TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS quotes (
     id INTEGER PRIMARY KEY,
@@ -76,12 +108,23 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS job_steps (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL REFERENCES jobs(id),
+    seq INTEGER NOT NULL,
+    stage TEXT NOT NULL,
+    name TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    done_by TEXT,
+    done_at TEXT
+);
 CREATE TABLE IF NOT EXISTS job_events (
     id INTEGER PRIMARY KEY,
     job_id INTEGER NOT NULL REFERENCES jobs(id),
     from_status TEXT,
     to_status TEXT NOT NULL,
     note TEXT,
+    actor TEXT,
     at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS invoices (
@@ -106,10 +149,6 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat(timespec="seconds")
 
 
-def _row(row: sqlite3.Row | None) -> dict | None:
-    return dict(row) if row is not None else None
-
-
 class Service:
     def __init__(self, path: str = ":memory:"):
         self.db = sqlite3.connect(path, check_same_thread=False)
@@ -117,9 +156,13 @@ class Service:
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
         self.lock = threading.RLock()
+        self.sessions = auth.Sessions()
         self.db.execute(
-            "INSERT OR IGNORE INTO plate_price (id, price) VALUES (1, 150000)"
-        )
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('plate_price', '150000')")
+        if self.db.execute("SELECT COUNT(*) FROM process_template").fetchone()[0] == 0:
+            self.db.executemany(
+                "INSERT INTO process_template (seq, stage, name) VALUES (?, ?, ?)",
+                [(i + 1, s, n) for i, (s, n) in enumerate(DEFAULT_TEMPLATE)])
         self.db.commit()
 
     # ---- helpers -------------------------------------------------------
@@ -137,6 +180,119 @@ class Service:
         self.db.commit()
         return cur.lastrowid
 
+    def _plate_price(self) -> float:
+        return float(self._one("SELECT value FROM settings WHERE key = 'plate_price'")["value"])
+
+    # ---- tài khoản & đăng nhập -----------------------------------------
+    def has_users(self) -> bool:
+        with self.lock:
+            return self.db.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0
+
+    def setup_admin(self, username: str, password: str, full_name: str = "") -> dict:
+        """Tạo tài khoản quản trị đầu tiên. Chỉ hoạt động khi chưa có người dùng nào."""
+        with self.lock:
+            if self.has_users():
+                raise DomainError("Hệ thống đã được khởi tạo; hãy đăng nhập", 409)
+            return self.create_user(username, password, full_name, "ADMIN")
+
+    def create_user(self, username: str, password: str, full_name: str, role: str) -> dict:
+        with self.lock:
+            try:
+                auth.validate_username(username)
+                auth.validate_password(password)
+            except ValueError as exc:
+                raise DomainError(str(exc)) from exc
+            if role not in auth.ROLES:
+                raise DomainError("Vai trò không hợp lệ")
+            exists = self.db.execute(
+                "SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+            if exists:
+                raise DomainError("Tên đăng nhập đã tồn tại", 409)
+            uid = self._write(
+                "INSERT INTO users (username, password_hash, full_name, role, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (username, auth.hash_password(password), full_name, role, _iso(_now())))
+            return self.get_user(uid)
+
+    def get_user(self, user_id: int) -> dict:
+        with self.lock:
+            row = self._one(
+                "SELECT id, username, full_name, role, active, created_at FROM users WHERE id = ?",
+                (user_id,))
+            row["active"] = bool(row["active"])
+            return row
+
+    def list_users(self) -> list[dict]:
+        with self.lock:
+            rows = self._all(
+                "SELECT id, username, full_name, role, active, created_at FROM users ORDER BY id")
+            for r in rows:
+                r["active"] = bool(r["active"])
+            return rows
+
+    def update_user(self, user_id: int, role: str | None = None, active: bool | None = None,
+                    full_name: str | None = None, password: str | None = None) -> dict:
+        with self.lock:
+            user = self.get_user(user_id)
+            if role is not None and role not in auth.ROLES:
+                raise DomainError("Vai trò không hợp lệ")
+            new_role = role or user["role"]
+            new_active = user["active"] if active is None else bool(active)
+            if user["role"] == "ADMIN" and (new_role != "ADMIN" or not new_active):
+                if self._active_admin_count() <= 1:
+                    raise DomainError("Phải còn ít nhất một quản trị viên đang hoạt động", 409)
+            if role is not None:
+                self._write("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+            if active is not None:
+                self._write("UPDATE users SET active = ? WHERE id = ?", (int(new_active), user_id))
+            if full_name is not None:
+                self._write("UPDATE users SET full_name = ? WHERE id = ?", (full_name, user_id))
+            if password:
+                try:
+                    auth.validate_password(password)
+                except ValueError as exc:
+                    raise DomainError(str(exc)) from exc
+                self._write("UPDATE users SET password_hash = ? WHERE id = ?",
+                            (auth.hash_password(password), user_id))
+            if active is False or password:
+                self.sessions.revoke_user(user_id)
+            return self.get_user(user_id)
+
+    def _active_admin_count(self) -> int:
+        return self.db.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'ADMIN' AND active = 1").fetchone()[0]
+
+    def login(self, username: str, password: str) -> dict:
+        with self.lock:
+            row = self.db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+            ok = row is not None and bool(row["active"]) and auth.verify_password(
+                password, row["password_hash"])
+            if not ok:
+                raise DomainError("Sai tên đăng nhập hoặc mật khẩu, hoặc tài khoản đã khóa", 401)
+            return {"token": self.sessions.create(row["id"]), "user": self.get_user(row["id"])}
+
+    def logout(self, token: str | None) -> None:
+        with self.lock:
+            self.sessions.revoke(token)
+
+    def user_for_token(self, token: str | None) -> dict | None:
+        with self.lock:
+            uid = self.sessions.user_id(token)
+            if uid is None:
+                return None
+            try:
+                user = self.get_user(uid)
+            except DomainError:
+                return None
+            return user if user["active"] else None
+
+    def change_own_password(self, user_id: int, old: str, new: str) -> None:
+        with self.lock:
+            row = self._one("SELECT password_hash FROM users WHERE id = ?", (user_id,))
+            if not auth.verify_password(old, row["password_hash"]):
+                raise DomainError("Mật khẩu hiện tại không đúng", 400)
+            self.update_user(user_id, password=new)
+
     # ---- danh mục ------------------------------------------------------
     def add_customer(self, name: str, phone: str = "", tax_code: str = "") -> dict:
         with self.lock:
@@ -144,8 +300,7 @@ class Service:
                 raise DomainError("Thiếu tên khách hàng")
             cid = self._write(
                 "INSERT INTO customers (name, phone, tax_code) VALUES (?, ?, ?)",
-                (name, phone, tax_code),
-            )
+                (name, phone, tax_code))
             return self._one("SELECT * FROM customers WHERE id = ?", (cid,))
 
     def list_customers(self) -> list[dict]:
@@ -160,8 +315,7 @@ class Service:
             pid = self._write(
                 "INSERT INTO paper_stock (name, gsm, sheet_w, sheet_h, price_per_kg, stock_kg)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
-                (name, gsm, sheet_w, sheet_h, price_per_kg, stock_kg),
-            )
+                (name, gsm, sheet_w, sheet_h, price_per_kg, stock_kg))
             return self._one("SELECT * FROM paper_stock WHERE id = ?", (pid,))
 
     def restock_paper(self, paper_id: int, kg: float) -> dict:
@@ -184,8 +338,7 @@ class Service:
             mid = self._write(
                 "INSERT INTO machines (name, max_colors, sheets_per_hour, hour_rate,"
                 " makeready_hours, available_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (name, max_colors, sheets_per_hour, hour_rate, makeready_hours, _iso(_now())),
-            )
+                (name, max_colors, sheets_per_hour, hour_rate, makeready_hours, _iso(_now())))
             return self._one("SELECT * FROM machines WHERE id = ?", (mid,))
 
     def list_machines(self) -> list[dict]:
@@ -194,7 +347,39 @@ class Service:
 
     def set_plate_price(self, price: float) -> None:
         with self.lock:
-            self._write("UPDATE plate_price SET price = ? WHERE id = 1", (price,))
+            self._write("INSERT OR REPLACE INTO settings (key, value) VALUES ('plate_price', ?)",
+                        (str(price),))
+
+    # ---- quy trình tiến trình (mẫu) -----------------------------------
+    def get_process_template(self) -> list[dict]:
+        with self.lock:
+            return self._all("SELECT stage, name FROM process_template ORDER BY seq")
+
+    def set_process_template(self, steps: list[dict]) -> list[dict]:
+        """Thay toàn bộ mẫu tiến trình. Chỉ áp dụng cho đơn tạo sau này."""
+        with self.lock:
+            if not isinstance(steps, list) or not steps:
+                raise DomainError("Mẫu tiến trình phải có ít nhất một bước")
+            clean = []
+            for s in steps:
+                stage = str(s.get("stage", ""))
+                name = str(s.get("name", "")).strip()
+                if stage not in TEMPLATE_STAGES:
+                    raise DomainError(f"Công đoạn không hợp lệ: {stage}")
+                if not name:
+                    raise DomainError("Tên bước không được để trống")
+                clean.append((stage, name))
+            self.db.execute("BEGIN")
+            try:
+                self.db.execute("DELETE FROM process_template")
+                self.db.executemany(
+                    "INSERT INTO process_template (seq, stage, name) VALUES (?, ?, ?)",
+                    [(i + 1, st, nm) for i, (st, nm) in enumerate(clean)])
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
+            return self.get_process_template()
 
     # ---- báo giá -------------------------------------------------------
     def _build(self, p: dict) -> tuple[calc.Spec, dict, calc.Rates, dict, dict]:
@@ -202,7 +387,6 @@ class Service:
         try:
             paper = self._one("SELECT * FROM paper_stock WHERE id = ?", (int(p["paper_id"]),))
             machine_id = p.get("machine_id")
-            machine = None
             if machine_id:
                 machine = self._one("SELECT * FROM machines WHERE id = ?", (int(machine_id),))
             else:
@@ -215,8 +399,7 @@ class Service:
             back = int(p.get("colors_back", 0))
             if max(front, back) > machine["max_colors"]:
                 raise DomainError(
-                    f"Máy {machine['name']} chỉ in tối đa {machine['max_colors']} màu/mặt"
-                )
+                    f"Máy {machine['name']} chỉ in tối đa {machine['max_colors']} màu/mặt")
 
             spec = calc.Spec(
                 quantity=int(p["quantity"]),
@@ -231,7 +414,7 @@ class Service:
             )
             rates = calc.Rates(
                 paper_per_kg=paper["price_per_kg"],
-                plate_price=self._one("SELECT price FROM plate_price WHERE id = 1")["price"],
+                plate_price=self._plate_price(),
                 press_hour_rate=machine["hour_rate"],
                 press_sheets_per_hour=machine["sheets_per_hour"],
                 makeready_hours=machine["makeready_hours"],
@@ -261,8 +444,7 @@ class Service:
                 "INSERT INTO quotes (customer_id, paper_id, params, result, created_at)"
                 " VALUES (?, ?, ?, ?, ?)",
                 (customer_id, int(params["paper_id"]), json.dumps(params),
-                 json.dumps(result), _iso(_now())),
-            )
+                 json.dumps(result), _iso(_now())))
             return self.get_quote(qid)
 
     def get_quote(self, quote_id: int) -> dict:
@@ -277,13 +459,14 @@ class Service:
             rows = self._all("SELECT id FROM quotes ORDER BY id DESC")
             return [self.get_quote(r["id"]) for r in rows]
 
-    def accept_quote(self, quote_id: int) -> dict:
-        """Khách chốt báo giá -> tạo đơn hàng ở trạng thái NEW."""
+    def accept_quote(self, quote_id: int, actor: str = "system") -> dict:
+        """Khách chốt báo giá -> tạo đơn NEW kèm bảng tiến trình theo mẫu hiện hành."""
         with self.lock:
             q = self.get_quote(quote_id)
             if q["status"] != "DRAFT":
                 raise DomainError("Báo giá này đã được chốt", 409)
             seq = self._one("SELECT COUNT(*) AS n FROM jobs")["n"] + 1
+            template = self._all("SELECT stage, name FROM process_template ORDER BY seq")
             now = _iso(_now())
             try:
                 self.db.execute("BEGIN")
@@ -291,13 +474,14 @@ class Service:
                     "INSERT INTO jobs (code, quote_id, customer_id, paper_id, status, params,"
                     " result, created_at, updated_at) VALUES (?, ?, ?, ?, 'NEW', ?, ?, ?, ?)",
                     (f"JOB-{seq:05d}", quote_id, q["customer_id"], q["paper_id"],
-                     json.dumps(q["params"]), json.dumps(q["result"]), now, now),
-                )
+                     json.dumps(q["params"]), json.dumps(q["result"]), now, now))
                 job_id = cur.lastrowid
+                self.db.executemany(
+                    "INSERT INTO job_steps (job_id, seq, stage, name) VALUES (?, ?, ?, ?)",
+                    [(job_id, i + 1, t["stage"], t["name"]) for i, t in enumerate(template)])
                 self.db.execute(
-                    "INSERT INTO job_events (job_id, from_status, to_status, note, at)"
-                    " VALUES (?, NULL, 'NEW', 'Khách chốt báo giá', ?)", (job_id, now),
-                )
+                    "INSERT INTO job_events (job_id, from_status, to_status, note, actor, at)"
+                    " VALUES (?, NULL, 'NEW', 'Khách chốt báo giá', ?, ?)", (job_id, actor, now))
                 self.db.execute("UPDATE quotes SET status = 'ACCEPTED' WHERE id = ?", (quote_id,))
                 self.db.commit()
             except Exception:
@@ -305,7 +489,7 @@ class Service:
                 raise
             return self.get_job(job_id)
 
-    # ---- đơn hàng ------------------------------------------------------
+    # ---- đơn hàng & tiến trình ----------------------------------------
     def _hydrate_job(self, row: dict) -> dict:
         row["params"] = json.loads(row["params"])
         row["result"] = json.loads(row["result"])
@@ -313,13 +497,29 @@ class Service:
         row["allowed_next"] = sorted(TRANSITIONS.get(row["status"], set()))
         return row
 
+    def _steps(self, job_id: int) -> list[dict]:
+        rows = self._all("SELECT * FROM job_steps WHERE job_id = ? ORDER BY seq, id", (job_id,))
+        for r in rows:
+            r["done"] = bool(r["done"])
+        return rows
+
+    @staticmethod
+    def _progress(steps: list[dict]) -> dict:
+        total = len(steps)
+        done = sum(1 for s in steps if s["done"])
+        return {"done": done, "total": total,
+                "percent": round(100 * done / total) if total else 100}
+
     def get_job(self, job_id: int) -> dict:
         with self.lock:
             job = self._hydrate_job(self._one("SELECT * FROM jobs WHERE id = ?", (job_id,)))
+            job["steps"] = self._steps(job_id)
+            job["progress"] = self._progress(job["steps"])
             job["events"] = self._all(
                 "SELECT * FROM job_events WHERE job_id = ? ORDER BY id", (job_id,))
-            job["invoice"] = _row(self.db.execute(
-                "SELECT * FROM invoices WHERE job_id = ?", (job_id,)).fetchone())
+            job["invoice"] = self.db.execute(
+                "SELECT * FROM invoices WHERE job_id = ?", (job_id,)).fetchone()
+            job["invoice"] = dict(job["invoice"]) if job["invoice"] else None
             return job
 
     def list_jobs(self, status: str | None = None) -> list[dict]:
@@ -328,15 +528,73 @@ class Service:
                 rows = self._all("SELECT * FROM jobs WHERE status = ? ORDER BY id DESC", (status,))
             else:
                 rows = self._all("SELECT * FROM jobs ORDER BY id DESC")
-            return [self._hydrate_job(r) for r in rows]
+            out = []
+            for r in rows:
+                job = self._hydrate_job(r)
+                job["progress"] = self._progress(self._steps(job["id"]))
+                out.append(job)
+            return out
 
-    def transition(self, job_id: int, target: str, note: str = "") -> dict:
+    def _ensure_open(self, job: dict) -> None:
+        if job["status"] in TERMINAL:
+            raise DomainError("Đơn đã đóng hoặc đã hủy", 409)
+
+    def add_step(self, job_id: int, stage: str, name: str, actor: str = "system") -> dict:
+        """Thêm bước riêng cho một đơn (ví dụ yêu cầu đặc biệt của khách)."""
+        with self.lock:
+            job = self._one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            self._ensure_open(job)
+            if stage not in TEMPLATE_STAGES:
+                raise DomainError(f"Công đoạn không hợp lệ: {stage}")
+            name = (name or "").strip()
+            if not name:
+                raise DomainError("Tên bước không được để trống")
+            seq = self._one(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM job_steps WHERE job_id = ?",
+                (job_id,))["n"]
+            self._write("INSERT INTO job_steps (job_id, seq, stage, name) VALUES (?, ?, ?, ?)",
+                        (job_id, seq, stage, name))
+            self._event(job_id, job["status"], job["status"], f"Thêm bước: {name}", actor)
+            self.db.commit()
+            return self.get_job(job_id)
+
+    def set_step_done(self, job_id: int, step_id: int, done: bool, actor: str = "system") -> dict:
+        """Đánh dấu hoàn thành / bỏ hoàn thành một bước (có lưu người và thời điểm)."""
+        with self.lock:
+            job = self._one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            self._ensure_open(job)
+            step = self._one("SELECT * FROM job_steps WHERE id = ? AND job_id = ?",
+                             (step_id, job_id))
+            now = _iso(_now())
+            self._write(
+                "UPDATE job_steps SET done = ?, done_by = ?, done_at = ? WHERE id = ?",
+                (int(bool(done)), actor if done else None, now if done else None, step_id))
+            verb = "Hoàn thành" if done else "Bỏ đánh dấu"
+            self._event(job_id, job["status"], job["status"], f"{verb} bước: {step['name']}", actor)
+            self.db.commit()
+            return self.get_job(job_id)
+
+    def _pending_steps(self, job_id: int, stage: str) -> list[dict]:
+        return [s for s in self._steps(job_id) if s["stage"] == stage and not s["done"]]
+
+    def _event(self, job_id: int, frm: str | None, to: str, note: str, actor: str) -> None:
+        self.db.execute(
+            "INSERT INTO job_events (job_id, from_status, to_status, note, actor, at)"
+            " VALUES (?, ?, ?, ?, ?, ?)", (job_id, frm, to, note, actor, _iso(_now())))
+
+    def transition(self, job_id: int, target: str, note: str = "", actor: str = "system") -> dict:
         with self.lock:
             job = self._hydrate_job(self._one("SELECT * FROM jobs WHERE id = ?", (job_id,)))
             try:
                 ensure_transition(job["status"], target)
             except InvalidTransition as exc:
                 raise DomainError(str(exc), 409) from exc
+
+            if (job["status"], target) not in REWORK_TRANSITIONS:
+                pending = self._pending_steps(job_id, job["status"])
+                if pending:
+                    names = "; ".join(s["name"] for s in pending)
+                    raise DomainError(f"Chưa hoàn thành tiến trình {job['status']}: {names}", 409)
 
             now = _iso(_now())
             try:
@@ -349,9 +607,9 @@ class Service:
                     "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
                     (target, now, job_id))
                 self.db.execute(
-                    "INSERT INTO job_events (job_id, from_status, to_status, note, at)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (job_id, job["status"], target, note, now))
+                    "INSERT INTO job_events (job_id, from_status, to_status, note, actor, at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (job_id, job["status"], target, note, actor, now))
                 if target == "DELIVERED":
                     self._issue_invoice(job_id, job["result"]["total"], now)
                 self.db.commit()
@@ -379,7 +637,7 @@ class Service:
             "INSERT INTO invoices (job_id, number, amount, paid, status, issued_at)"
             " VALUES (?, ?, ?, 0, 'UNPAID', ?)", (job_id, number, amount, now))
 
-    def schedule(self, job_id: int, machine_id: int) -> dict:
+    def schedule(self, job_id: int, machine_id: int, actor: str = "system") -> dict:
         """Xếp đơn vào hàng đợi máy (lập lịch hữu hạn công suất)."""
         with self.lock:
             job = self._hydrate_job(self._one("SELECT * FROM jobs WHERE id = ?", (job_id,)))
@@ -394,14 +652,16 @@ class Service:
             hours = job["result"]["press_hours"]
             start = max(_now(), datetime.fromisoformat(machine["available_at"]))
             end = start + timedelta(hours=hours)
-            self.db.execute("BEGIN")
             try:
+                self.db.execute("BEGIN")
                 self.db.execute(
                     "UPDATE jobs SET machine_id = ?, scheduled_start = ?, scheduled_end = ?,"
                     " updated_at = ? WHERE id = ?",
                     (machine_id, _iso(start), _iso(end), _iso(_now()), job_id))
                 self.db.execute(
                     "UPDATE machines SET available_at = ? WHERE id = ?", (_iso(end), machine_id))
+                self._event(job_id, job["status"], job["status"],
+                            f"Xếp lịch máy {machine['name']}", actor)
                 self.db.commit()
             except Exception:
                 self.db.rollback()
@@ -409,15 +669,15 @@ class Service:
             return self.get_job(job_id)
 
     # ---- hóa đơn & công nợ --------------------------------------------
-    def pay_invoice(self, invoice_id: int, amount: float) -> dict:
+    def pay_invoice(self, invoice_id: int, amount: float, actor: str = "system") -> dict:
         with self.lock:
             if amount <= 0:
                 raise DomainError("Số tiền thanh toán phải lớn hơn 0")
             inv = self._one("SELECT * FROM invoices WHERE id = ?", (invoice_id,))
             paid = min(inv["amount"], inv["paid"] + amount)
             status = "PAID" if paid >= inv["amount"] else "PARTIAL"
-            self.db.execute("BEGIN")
             try:
+                self.db.execute("BEGIN")
                 self.db.execute(
                     "UPDATE invoices SET paid = ?, status = ? WHERE id = ?",
                     (paid, status, invoice_id))
@@ -429,9 +689,9 @@ class Service:
                             "UPDATE jobs SET status = 'CLOSED', updated_at = ? WHERE id = ?",
                             (now, job["id"]))
                         self.db.execute(
-                            "INSERT INTO job_events (job_id, from_status, to_status, note, at)"
-                            " VALUES (?, 'DELIVERED', 'CLOSED', 'Đã thu đủ tiền', ?)",
-                            (job["id"], now))
+                            "INSERT INTO job_events (job_id, from_status, to_status, note, actor, at)"
+                            " VALUES (?, 'DELIVERED', 'CLOSED', 'Đã thu đủ tiền', ?, ?)",
+                            (job["id"], actor, now))
                 self.db.commit()
             except Exception:
                 self.db.rollback()
@@ -450,8 +710,7 @@ class Service:
                 counts[r["status"]] = r["n"]
             receivable = self._one(
                 "SELECT COALESCE(SUM(amount - paid), 0) AS v FROM invoices WHERE status != 'PAID'")["v"]
-            revenue = self._one(
-                "SELECT COALESCE(SUM(amount), 0) AS v FROM invoices")["v"]
+            revenue = self._one("SELECT COALESCE(SUM(amount), 0) AS v FROM invoices")["v"]
             low_stock = self._all(
                 "SELECT id, name, stock_kg FROM paper_stock WHERE stock_kg < 50 ORDER BY stock_kg")
             return {

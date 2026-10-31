@@ -1,90 +1,99 @@
-# Offset MES — Phần mềm quản lý sản xuất thu nhỏ toàn trình cho xưởng in offset
+# Offset MES — ERP sản xuất thu nhỏ toàn trình cho xưởng in offset
 
-Hệ thống phục vụ một xưởng in offset vừa và nhỏ đi từ **báo giá → đơn hàng → chuẩn bị bản → in → gia công sau in → QC → giao hàng → hóa đơn → thu tiền**,
-với kho giấy và lịch máy được cập nhật theo từng bước.
+Phần mềm chạy trên PC cho xưởng in offset vừa và nhỏ: đi từ **báo giá → đơn hàng → tiến trình sản xuất
+theo danh sách bước → giao hàng → hóa đơn → thu tiền**, với kho giấy, lịch máy và phân quyền người dùng.
 
-Phiên bản hiện tại (`0.1.0`) chỉ dùng **thư viện chuẩn Python 3.10+** và **SQLite**, không cần cài thêm gói nào.
+- **Tài khoản quản trị tự đặt:** lần chạy đầu tiên, tự tạo tài khoản quản trị với tên và mật khẩu của bạn.
+- **Phân quyền theo vai trò:** Quản trị, Quản lý sản xuất, Kinh doanh, Vận hành, Kế toán.
+- **Tiến trình theo danh sách bước:** mỗi đơn có checklist sinh từ mẫu; không chuyển công đoạn khi còn bước chưa xong.
+- **Nhật ký đầy đủ:** ai làm bước nào, lúc nào, chuyển trạng thái nào.
+- **Hướng dẫn sử dụng tiếng Việt:** [docs/HUONG_DAN_SU_DUNG.md](docs/HUONG_DAN_SU_DUNG.md).
 
-## Chạy thử
+Chỉ dùng **thư viện chuẩn Python 3.10+** và **SQLite**, không cần cài thêm gói.
+
+## Chạy nhanh
 
 ```bash
-python3 -m offset_mes --port 8000 --db offset_mes.db
-# mở http://127.0.0.1:8000
+python3 -m offset_mes desktop                 # mở như ứng dụng PC, tự mở trình duyệt
+python3 -m offset_mes --port 8000             # máy chủ web (mạng nội bộ)
+python3 -m offset_mes create-admin --user giamdoc.lan   # tạo / đặt lại tài khoản quản trị
 ```
 
-Chạy kiểm thử:
+Đóng gói file `.exe` cho Windows: chạy `scripts\build_windows.bat` (kết quả `dist\OffsetMES.exe`).
+Lưu ý: script này chưa được chạy thử trên Windows trong môi trường phát triển; nên kiểm tra trên một máy thật trước khi triển khai.
+
+Kiểm thử:
 
 ```bash
 python3 -m unittest discover -s tests -t . -v
 ```
 
+> **Nâng cấp từ phiên bản 0.1:** cấu trúc CSDL đã thay đổi (thêm người dùng, bước tiến trình, cột người thực hiện).
+> Hãy xóa file `offset_mes.db` cũ hoặc dùng đường dẫn `--db` mới trước khi chạy.
+
 ## Luồng nghiệp vụ
 
 ```
-Khách hàng ──► Báo giá (tính số tờ, giấy, giờ máy, giá)
-                  │ khách chốt
-                  ▼
-              Đơn hàng NEW ──► PREPRESS ──(xếp lịch máy)──► PLATE ──► PRINTING ──► FINISHING ──► QC ──► READY ──► DELIVERED ──► CLOSED
-                                                                       │ xuất giấy khỏi kho            ▲ làm lại │        │ tạo hóa đơn    │ thu đủ tiền
-                                                                                                      └─────────┘        ▼
-                                                                                                                    Công nợ
+Khách ──► Báo giá ──khách chốt──► NEW ─► PREPRESS ─► PLATE ─► PRINTING ─► FINISHING ─► QC ─► READY ─► DELIVERED ─► CLOSED
+                                    │ tạo bảng tiến trình          │ xếp máy    │ xuất giấy     ▲ lỗi: làm lại │ hóa đơn  │ thu đủ tiền
+                                    └──────────────────────────────┘                               └──────────┘
 ```
+
+Cổng tiến trình: muốn rời một công đoạn, mọi bước của công đoạn đó phải được đánh dấu xong.
+Riêng QC → FINISHING (làm lại) không bị cổng chặn.
+
+## Kiến trúc
 
 | Module | Nội dung |
 |---|---|
-| `offset_mes/calc.py` | Thuần tính toán: xếp bản (`ups`, thử cả hai chiều xoay), số tờ = chạy + hao hụt + chạy thử căn màu, khối lượng giấy (kg), giờ máy, giá vốn → lợi nhuận → VAT 10% |
-| `offset_mes/workflow.py` | Máy trạng thái vòng đời đơn; không cho nhảy cóc bước; QC có thể trả về gia công |
-| `offset_mes/service.py` | Nghiệp vụ + SQLite: khách hàng, kho giấy, máy in, báo giá, đơn hàng, lịch máy, hóa đơn, thu tiền, tổng quan |
-| `offset_mes/server.py` | REST API JSON (`dispatch` thuần để kiểm thử) và phục vụ giao diện tĩnh |
-| `offset_mes/static/index.html` | Giao diện web một trang (tiếng Việt), không framework |
+| `offset_mes/calc.py` | Thuần tính toán: xếp bản (thử cả hai chiều xoay), số tờ, kg giấy, giờ máy, giá vốn → lợi nhuận → VAT |
+| `offset_mes/workflow.py` | Máy trạng thái vòng đời đơn |
+| `offset_mes/auth.py` | Băm mật khẩu PBKDF2-SHA256, phiên đăng nhập, ma trận quyền theo vai trò |
+| `offset_mes/service.py` | Nghiệp vụ + SQLite: người dùng, khách, kho giấy, máy, báo giá, đơn, tiến trình, lịch máy, hóa đơn |
+| `offset_mes/server.py` | REST API JSON; mỗi route khai báo quyền cần có; `dispatch()` thuần để kiểm thử |
+| `offset_mes/launcher.py` | Chạy như ứng dụng PC: máy chủ cục bộ + mở trình duyệt; dữ liệu ở `%APPDATA%\OffsetMES` |
+| `offset_mes/static/index.html` | Giao diện một trang (tiếng Việt), không framework |
+| `run_desktop.py` | Điểm vào cho ứng dụng PC và file `.exe` |
 
-### Quy tắc nghiệp vụ đã mã hóa
+## Bảo mật
 
-- **Xếp bản:** lề kẹp máy 10 mm, khe cắt 3 mm, tràn mép 3 mm mỗi cạnh; chọn chiều xoay cho số sản phẩm/tờ lớn hơn.
-- **Số tờ:** `ceil(SL / ups) + hao hụt% + 20 × số màu` (tờ chạy thử/căn màu).
-- **Giấy:** khối lượng tờ = dài × rộng × gsm; giá tính theo VND/kg của loại giấy.
-- **Máy:** không nhận đơn nếu số màu mặt trước/sau vượt quá số màu tối đa của máy; lịch máy xếp nối tiếp theo `available_at`.
-- **Kho giấy:** chỉ xuất kho **một lần** khi chuyển sang `PRINTING`; thiếu giấy thì giữ nguyên trạng thái và báo lỗi 409.
-- **Bản kẽm:** chưa làm bản (`PLATE`) thì bắt buộc đã xếp lịch máy.
-- **Hóa đơn:** phát hành tự động khi đơn sang `DELIVERED`; đơn tự chuyển `CLOSED` khi thu đủ tiền.
+- Mật khẩu băm PBKDF2-SHA256 (200.000 vòng), không lưu dạng gốc.
+- Phiên đăng nhập hết hạn sau 12 giờ; khóa tài khoản hoặc đổi mật khẩu sẽ đăng xuất phiên hiện có.
+- Luôn còn ít nhất một quản trị viên đang hoạt động.
+- Mặc định chỉ lắng nghe `127.0.0.1`. Chưa có HTTPS: không đưa ra internet khi chưa có tường lửa và TLS.
+- Phiên lưu trong bộ nhớ: khởi động lại ứng dụng thì phải đăng nhập lại.
 
 ## API chính
 
-| Method | Đường dẫn | Mô tả |
+Tất cả route (trừ `/api/setup-status`, `/api/setup`, `/api/login`) cần header `Authorization: Bearer <token>`.
+
+| Method | Đường dẫn | Quyền |
 |---|---|---|
-| GET/POST | `/api/customers` | Khách hàng |
-| GET/POST | `/api/papers`, `POST /api/papers/{id}/restock` | Kho giấy |
-| GET/POST | `/api/machines` | Máy in |
-| POST | `/api/quotes/estimate` | Tính báo giá (không lưu) |
-| GET/POST | `/api/quotes`, `POST /api/quotes/{id}/accept` | Báo giá và chốt thành đơn |
-| GET | `/api/jobs?status=` , `GET /api/jobs/{id}` | Đơn hàng kèm lịch sử và hóa đơn |
-| POST | `/api/jobs/{id}/transition` `{"to": "..."}` | Chuyển trạng thái |
-| POST | `/api/jobs/{id}/schedule` `{"machine_id": n}` | Xếp lịch máy |
-| GET | `/api/invoices`, `POST /api/invoices/{id}/pay` `{"amount": n}` | Hóa đơn, công nợ |
-| GET | `/api/dashboard` | Tổng quan: đơn theo trạng thái, doanh thu, công nợ, giấy sắp hết |
+| POST | `/api/setup`, `/api/login`, `/api/logout`, `/api/me/password` | công khai / đăng nhập |
+| GET/POST | `/api/users`, `POST /api/users/{id}` | ADMIN |
+| GET/PUT | `/api/process-template` | đọc: mọi người · sửa: ADMIN |
+| GET/POST | `/api/customers`, `/api/papers`, `/api/machines`, `POST /api/papers/{id}/restock` | đọc: mọi người · ghi: theo vai trò |
+| POST | `/api/quotes/estimate`, `/api/quotes`, `/api/quotes/{id}/accept` | SALES, MANAGER, ADMIN |
+| GET | `/api/jobs`, `/api/jobs/{id}` (có `steps`, `progress`, `events`) | mọi người |
+| POST | `/api/jobs/{id}/transition`, `/schedule`, `/steps` | OPERATOR trở lên |
+| POST | `/api/jobs/{id}/steps/{step_id}` `{"done": true}` | OPERATOR trở lên |
+| POST | `/api/invoices/{id}/pay` | ACCOUNTANT, MANAGER, ADMIN |
+| GET | `/api/dashboard`, `/api/invoices`, `/api/quotes` | mọi người |
 
-Ví dụ báo giá:
-
-```bash
-curl -X POST localhost:8000/api/quotes/estimate -H 'Content-Type: application/json' -d '{
-  "paper_id": 1, "machine_id": 1, "piece_w": 90, "piece_h": 54, "quantity": 1000,
-  "colors_front": 4, "colors_back": 4, "finishing_per_piece": 0, "margin_pct": 25
-}'
-```
+Mã lỗi: 401 chưa đăng nhập · 403 không đủ quyền · 404 không tìm thấy · 409 vi phạm quy tắc nghiệp vụ · 400 dữ liệu sai.
 
 ## Lộ trình đề xuất
 
-1. **Hoàn thiện nghiệp vụ lõi (đang có):** báo giá, đơn, kho giấy, lịch máy, hóa đơn.
-2. **Prepress:** nhận file PDF, kiểm tra độ phân giải/màu/tràn mép, duyệt proof trực tuyến cho khách.
-3. **Kho mực & bản kẽm:** định mức mực theo diện tích phủ, theo dõi tồn bản kẽm và tái sử dụng bản in lặp.
-4. **MES trên xưởng:** ghi nhận sản lượng và phế phẩm theo từng máy, đo thời gian thực để điều chỉnh định mức.
-5. **Gia công sau in:** quy trình cắt, gấp, đóng sách, cán màng, với công đoạn và người phụ trách.
-6. **Tích hợp:** xuất hóa đơn điện tử, cổng khách hàng để theo dõi đơn, kết nối kế toán.
-7. **Đa người dùng:** phân quyền (kinh doanh, prepress, vận hành máy, kế toán) và đăng nhập.
+1. **Prepress:** nhận file PDF, kiểm tra độ phân giải/màu/tràn mép, duyệt proof trực tuyến cho khách.
+2. **Kho mực & bản kẽm:** định mức mực theo diện tích phủ; theo dõi tồn bản kẽm và tái sử dụng bản lặp.
+3. **Ghi nhận sản lượng thực tế theo máy:** số tờ chạy, phế phẩm, thời gian dừng máy; so với định mức.
+4. **Tiến trình nâng cao:** mẫu theo loại sản phẩm (danh thiếp, tờ rơi, sách…), ghi nhận người phụ trách từng công đoạn.
+5. **Tích hợp:** xuất hóa đơn điện tử, cổng khách hàng theo dõi đơn, xuất dữ liệu kế toán.
+6. **Bảo mật nâng cao:** HTTPS nội bộ, buộc đổi mật khẩu lần đầu, nhật ký đăng nhập, sao lưu tự động.
 
 ## Giới hạn hiện tại
 
-- Chưa có đăng nhập/phân quyền; chỉ phù hợp chạy nội bộ trên mạng LAN tin cậy (mặc định bind `127.0.0.1`).
-- Mô hình xếp bản là đơn giản (một loại sản phẩm trên mỗi tờ); chưa hỗ trợ xếp nhiều thiết kế khác nhau trên cùng khổ (gang-run).
-- Giá mực và thời gian setup được quy về thông số máy/bảng giá cố định; chưa có định mức theo từng loại giấy/mực.
+- Xếp bản đơn giản (một loại sản phẩm trên mỗi tờ); chưa gang-run nhiều thiết kế khác nhau.
+- Định mức chi phí (lề kẹp, hao hụt, chạy thử, lợi nhuận, VAT) đang là hằng số trong mã nguồn.
 - Lịch máy là hàng đợi nối tiếp đơn giản, chưa tối ưu theo ưu tiên hay ngày giao.
+- Chưa có kiểm thử giao diện tự động; giao diện đã được kiểm tra cú pháp và thao tác API thật.
