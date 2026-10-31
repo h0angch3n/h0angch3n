@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offset MES</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#0f1115; --card:#181b22; --ink:#e7e9ee; --muted:#9aa3b2; --line:#2a2f3a; --accent:#60a5fa; }
+  }
+  :root[data-theme="dark"] { --bg:#0f1115; --card:#181b22; --ink:#e7e9ee; --muted:#9aa3b2; --line:#2a2f3a; --accent:#60a5fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 16px; background:var(--card); border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; }
+  header h1 { font-size:17px; margin:0; }
+  nav { display:flex; flex-wrap:wrap; gap:6px; }
+  nav button { border:1px solid var(--line); background:transparent; color:var(--ink); padding:6px 10px; border-radius:6px; cursor:pointer; }
+  nav button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  section { display:none; } section.active { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .grid { display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); }
+  .stat b { display:block; font-size:20px; }
+  .stat span { color:var(--muted); font-size:12px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  input, select { padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); font:inherit; }
+  button.act { padding:7px 12px; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; font:inherit; }
+  button.ghost { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--ink); cursor:pointer; font:inherit; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:var(--line); }
+  .pill.ok { background:#dcfce7; color:var(--ok); } .pill.warn { background:#fef3c7; color:var(--warn); } .pill.bad { background:#fee2e2; color:var(--bad); }
+  #msg { position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:8px; display:none; max-width:360px; }
+  .muted { color:var(--muted); }
+  .scroll { overflow-x:auto; }
+  @media (max-width:600px) { main { padding:12px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Offset MES · Quản lý xưởng in offset</h1>
+  <nav>
+    <button data-tab="dash" class="active">Tổng quan</button>
+    <button data-tab="quote">Báo giá</button>
+    <button data-tab="jobs">Đơn hàng</button>
+    <button data-tab="plant">Kho &amp; máy</button>
+    <button data-tab="ar">Hóa đơn</button>
+  </nav>
+</header>
+
+<main>
+  <section id="dash" class="active">
+    <div class="grid" id="stats"></div>
+    <div class="card"><h3>Đơn theo trạng thái</h3><div class="scroll"><table id="byStatus"></table></div></div>
+    <div class="card"><h3>Cảnh báo tồn kho giấy (&lt; 50 kg)</h3><div id="lowStock" class="muted">—</div></div>
+  </section>
+
+  <section id="quote">
+    <div class="card">
+      <h3>Tính báo giá</h3>
+      <div class="grid">
+        <label>Khách hàng<select id="q_customer"></select></label>
+        <label>Loại giấy<select id="q_paper"></select></label>
+        <label>Máy in<select id="q_machine"></select></label>
+        <label>Rộng thành phẩm (mm)<input id="q_pw" type="number" value="90"></label>
+        <label>Cao thành phẩm (mm)<input id="q_ph" type="number" value="54"></label>
+        <label>Số lượng<input id="q_qty" type="number" value="1000"></label>
+        <label>Màu mặt trước<input id="q_cf" type="number" value="4"></label>
+        <label>Màu mặt sau<input id="q_cb" type="number" value="0"></label>
+        <label>Gia công sau in (VND/cái)<input id="q_fin" type="number" value="0"></label>
+        <label>Hao hụt (%)<input id="q_spoil" type="number" value="3"></label>
+        <label>Lợi nhuận (%)<input id="q_margin" type="number" value="25"></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="btnEstimate">Tính giá</button>
+        <button class="ghost" id="btnSaveQuote">Lưu báo giá</button>
+        <span class="muted">Thêm khách hàng / giấy / máy ở tab Kho &amp; máy.</span>
+      </div>
+      <div id="estimate" style="margin-top:12px"></div>
+    </div>
+    <div class="card"><h3>Báo giá đã lưu</h3><div class="scroll"><table id="quotes"></table></div></div>
+  </section>
+
+  <section id="jobs">
+    <div class="card">
+      <div class="row">
+        <label>Lọc trạng thái
+          <select id="jobFilter"><option value="">Tất cả</option></select>
+        </label>
+        <button class="ghost" id="btnRefreshJobs">Tải lại</button>
+      </div>
+    </div>
+    <div class="card"><div class="scroll"><table id="jobTable"></table></div></div>
+  </section>
+
+  <section id="plant">
+    <div class="grid">
+      <div class="card">
+        <h3>Thêm khách hàng</h3>
+        <label>Tên<input id="c_name"></label>
+        <label>Điện thoại<input id="c_phone"></label>
+        <label>MST<input id="c_tax"></label>
+        <p><button class="act" id="btnAddCustomer">Thêm</button></p>
+      </div>
+      <div class="card">
+        <h3>Thêm giấy</h3>
+        <label>Tên giấy<input id="p_name"></label>
+        <label>Định lượng (g/m²)<input id="p_gsm" type="number" value="300"></label>
+        <label>Khổ tờ rộng (mm)<input id="p_w" type="number" value="640"></label>
+        <label>Khổ tờ cao (mm)<input id="p_h" type="number" value="900"></label>
+        <label>Giá (VND/kg)<input id="p_price" type="number" value="28000"></label>
+        <label>Tồn kho (kg)<input id="p_stock" type="number" value="500"></label>
+        <p><button class="act" id="btnAddPaper">Thêm</button></p>
+      </div>
+      <div class="card">
+        <h3>Thêm máy in</h3>
+        <label>Tên máy<input id="m_name"></label>
+        <label>Tốc độ (tờ/giờ)<input id="m_speed" type="number" value="6000"></label>
+        <label>Giá giờ máy (VND)<input id="m_rate" type="number" value="450000"></label>
+        <label>Số màu tối đa<input id="m_colors" type="number" value="4"></label>
+        <p><button class="act" id="btnAddMachine">Thêm</button></p>
+      </div>
+    </div>
+    <div class="card"><h3>Giấy trong kho</h3><div class="scroll"><table id="papers"></table></div></div>
+    <div class="card"><h3>Máy in</h3><div class="scroll"><table id="machines"></table></div></div>
+  </section>
+
+  <section id="ar">
+    <div class="card"><h3>Hóa đơn &amp; công nợ</h3><div class="scroll"><table id="invoices"></table></div></div>
+  </section>
+</main>
+
+<div id="msg"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let STATUSES = [];
+
+function toast(text) {
+  const el = $("msg"); el.textContent = text; el.style.display = "block";
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.style.display = "none", 3500);
+}
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method, headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ("Lỗi " + res.status));
+  return data;
+}
+
+async function run(fn) {
+  try { await fn(); } catch (e) { toast(e.message); }
+}
+
+document.querySelectorAll("nav button").forEach(btn => btn.onclick = () => {
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b === btn));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("active", s.id === btn.dataset.tab));
+  loadTab(btn.dataset.tab);
+});
+
+async function loadTab(tab) {
+  if (tab === "dash") return loadDash();
+  if (tab === "quote") return loadQuoteTab();
+  if (tab === "jobs") return loadJobs();
+  if (tab === "plant") return loadPlant();
+  if (tab === "ar") return loadInvoices();
+}
+
+async function loadDash() {
+  const d = await api("GET", "/api/dashboard");
+  const jobsOpen = Object.entries(d.jobs_by_status).filter(([s]) => !["CLOSED","CANCELLED"].includes(s)).reduce((a,[,n]) => a+n, 0);
+  $("stats").innerHTML = [
+    ["Đơn đang mở", jobsOpen], ["Doanh thu đã xuất HĐ", fmt(d.revenue_invoiced) + " ₫"],
+    ["Công nợ phải thu", fmt(d.receivable) + " ₫"], ["Máy in", d.machines.length],
+  ].map(([k,v]) => `<div class="card stat"><b>${v}</b><span>${k}</span></div>`).join("");
+  $("byStatus").innerHTML = "<tr><th>Trạng thái</th><th>Số đơn</th></tr>" +
+    Object.entries(d.jobs_by_status).map(([s,n]) => `<tr><td>${s}</td><td>${n}</td></tr>`).join("");
+  $("lowStock").innerHTML = d.low_stock_papers.length
+    ? d.low_stock_papers.map(p => `<span class="pill warn">${esc(p.name)}: ${p.stock_kg} kg</span>`).join(" ")
+    : "Không có loại giấy nào sắp hết.";
+}
+
+async function loadQuoteTab() {
+  const [customers, papers, machines, quotes] = await Promise.all([
+    api("GET", "/api/customers"), api("GET", "/api/papers"),
+    api("GET", "/api/machines"), api("GET", "/api/quotes"),
+  ]);
+  $("q_customer").innerHTML = customers.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("") || `<option value="">(chưa có khách)</option>`;
+  $("q_paper").innerHTML = papers.map(p => `<option value="${p.id}">${esc(p.name)} ${p.gsm}gsm ${p.sheet_w}×${p.sheet_h}</option>`).join("");
+  $("q_machine").innerHTML = `<option value="">Tự chọn máy nhanh nhất</option>` + machines.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join("");
+  $("quotes").innerHTML = "<tr><th>Mã</th><th>Khách</th><th>Tổng (có VAT)</th><th>Đơn giá</th><th>Trạng thái</th><th></th></tr>" +
+    quotes.map(q => `<tr><td>#${q.id}</td><td>${esc(customerName(customers, q.customer_id))}</td><td>${fmt(q.result.total)} ₫</td><td>${fmt(q.result.unit_price)} ₫</td>
+      <td><span class="pill ${q.status === "ACCEPTED" ? "ok" : ""}">${q.status === "ACCEPTED" ? "Đã chốt" : "Nháp"}</span></td>
+      <td>${q.status === "DRAFT" ? `<button class="act" onclick="acceptQuote(${q.id})">Khách chốt</button>` : ""}</td></tr>`).join("");
+}
+const customerName = (list, id) => (list.find(c => c.id === id) || {}).name || "";
+
+function quotePayload() {
+  return {
+    customer_id: Number($("q_customer").value), paper_id: Number($("q_paper").value),
+    machine_id: $("q_machine").value ? Number($("q_machine").value) : null,
+    piece_w: Number($("q_pw").value), piece_h: Number($("q_ph").value), quantity: Number($("q_qty").value),
+    colors_front: Number($("q_cf").value), colors_back: Number($("q_cb").value),
+    finishing_per_piece: Number($("q_fin").value), spoilage_pct: Number($("q_spoil").value),
+    margin_pct: Number($("q_margin").value),
+  };
+}
+
+function renderEstimate(r) {
+  $("estimate").innerHTML = `
+    <div class="grid">
+      <div class="card stat"><b>${r.ups}</b><span>sản phẩm / tờ in</span></div>
+      <div class="card stat"><b>${fmt(r.total_sheets)}</b><span>tổng số tờ (kể cả chạy thử &amp; hao hụt)</span></div>
+      <div class="card stat"><b>${r.paper_kg} kg</b><span>giấy cần dùng</span></div>
+      <div class="card stat"><b>${r.press_hours} h</b><span>thời gian máy</span></div>
+      <div class="card stat"><b>${fmt(r.total)} ₫</b><span>tổng có VAT 10%</span></div>
+      <div class="card stat"><b>${fmt(r.unit_price)} ₫</b><span>đơn giá / cái</span></div>
+    </div>
+    <p class="muted">Giá vốn: giấy ${fmt(r.cost.paper)} · bản kẽm ${fmt(r.cost.plates)} · máy ${fmt(r.cost.press)} · gia công ${fmt(r.cost.finishing)} · tổng vốn ${fmt(r.cost.total)} ₫ · lợi nhuận ${r.margin_pct}% · VAT ${fmt(r.vat)} ₫</p>`;
+}
+
+async function acceptQuote(id) {
+  await run(async () => {
+    const job = await api("POST", `/api/quotes/${id}/accept`);
+    toast(`Đã tạo đơn ${job.code}`);
+    loadQuoteTab();
+  });
+}
+
+async function loadJobs() {
+  if (!STATUSES.length) STATUSES = await api("GET", "/api/statuses");
+  const filter = $("jobFilter");
+  if (filter.options.length <= 1) filter.innerHTML = `<option value="">Tất cả</option>` + STATUSES.map(s => `<option>${s}</option>`).join("");
+  const q = filter.value ? `?status=${encodeURIComponent(filter.value)}` : "";
+  const [jobs, machines] = await Promise.all([api("GET", "/api/jobs" + q), api("GET", "/api/machines")]);
+  const mopts = machines.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join("");
+  $("jobTable").innerHTML = "<tr><th>Mã đơn</th><th>Trạng thái</th><th>Số lượng</th><th>Tổng</th><th>Lịch máy</th><th>Thao tác</th></tr>" +
+    jobs.map(j => {
+      const sched = j.scheduled_start ? `${j.scheduled_start.replace("T"," ")}` : `<select id="m_${j.id}"><option value="">— chọn máy —</option>${mopts}</select> <button class="ghost" onclick="schedule(${j.id})">Xếp</button>`;
+      const next = j.allowed_next.map(s => `<button class="ghost" onclick="move(${j.id},'${s}')">→ ${s}</button>`).join(" ");
+      return `<tr><td><b>${j.code}</b></td><td><span class="pill">${j.status}</span></td>
+        <td>${fmt(j.params.quantity)}</td><td>${fmt(j.result.total)} ₫</td>
+        <td>${sched}</td><td>${next || '<span class="muted">—</span>'}</td></tr>`;
+    }).join("") || `<tr><td class="muted">Chưa có đơn nào.</td></tr>`;
+}
+$("jobFilter").onchange = () => run(loadJobs);
+$("btnRefreshJobs").onclick = () => run(loadJobs);
+
+async function move(id, to) {
+  await run(async () => {
+    await api("POST", `/api/jobs/${id}/transition`, { to });
+    toast(`Đơn chuyển sang ${to}`);
+    loadJobs();
+  });
+}
+async function schedule(id) {
+  await run(async () => {
+    const mid = $("m_" + id).value;
+    if (!mid) throw new Error("Chọn máy trước khi xếp lịch");
+    const job = await api("POST", `/api/jobs/${id}/schedule`, { machine_id: Number(mid) });
+    toast(`Đã xếp lịch: ${job.scheduled_start}`);
+    loadJobs();
+  });
+}
+
+async function loadPlant() {
+  const [papers, machines] = await Promise.all([api("GET", "/api/papers"), api("GET", "/api/machines")]);
+  $("papers").innerHTML = "<tr><th>Tên</th><th>gsm</th><th>Khổ (mm)</th><th>Giá/kg</th><th>Tồn (kg)</th><th>Nhập thêm</th></tr>" +
+    papers.map(p => `<tr><td>${esc(p.name)}</td><td>${p.gsm}</td><td>${p.sheet_w}×${p.sheet_h}</td><td>${fmt(p.price_per_kg)}</td>
+      <td>${p.stock_kg}</td><td><input id="rs_${p.id}" type="number" style="width:80px" value="100"> <button class="ghost" onclick="restock(${p.id})">Nhập</button></td></tr>`).join("");
+  $("machines").innerHTML = "<tr><th>Máy</th><th>Tốc độ (tờ/h)</th><th>Giá giờ</th><th>Số màu</th><th>Sẵn sàng từ</th></tr>" +
+    machines.map(m => `<tr><td>${esc(m.name)}</td><td>${fmt(m.sheets_per_hour)}</td><td>${fmt(m.hour_rate)} ₫</td><td>${m.max_colors}</td><td>${m.available_at.replace("T"," ")}</td></tr>`).join("");
+}
+async function restock(id) {
+  await run(async () => {
+    await api("POST", `/api/papers/${id}/restock`, { kg: Number($("rs_" + id).value) });
+    toast("Đã nhập kho"); loadPlant();
+  });
+}
+
+$("btnAddCustomer").onclick = () => run(async () => {
+  await api("POST", "/api/customers", { name: $("c_name").value, phone: $("c_phone").value, tax_code: $("c_tax").value });
+  toast("Đã thêm khách hàng"); loadPlant();
+});
+$("btnAddPaper").onclick = () => run(async () => {
+  await api("POST", "/api/papers", {
+    name: $("p_name").value, gsm: Number($("p_gsm").value), sheet_w: Number($("p_w").value),
+    sheet_h: Number($("p_h").value), price_per_kg: Number($("p_price").value), stock_kg: Number($("p_stock").value),
+  });
+  toast("Đã thêm giấy"); loadPlant();
+});
+$("btnAddMachine").onclick = () => run(async () => {
+  await api("POST", "/api/machines", {
+    name: $("m_name").value, sheets_per_hour: Number($("m_speed").value),
+    hour_rate: Number($("m_rate").value), max_colors: Number($("m_colors").value),
+  });
+  toast("Đã thêm máy"); loadPlant();
+});
+
+$("btnEstimate").onclick = () => run(async () => renderEstimate(await api("POST", "/api/quotes/estimate", quotePayload())));
+$("btnSaveQuote").onclick = () => run(async () => {
+  const q = await api("POST", "/api/quotes", quotePayload());
+  toast(`Đã lưu báo giá #${q.id}`); renderEstimate(q.result); loadQuoteTab();
+});
+
+async function loadInvoices() {
+  const invs = await api("GET", "/api/invoices");
+  $("invoices").innerHTML = "<tr><th>Số HĐ</th><th>Tổng</th><th>Đã thu</th><th>Trạng thái</th><th>Thu tiền</th></tr>" +
+    invs.map(i => `<tr><td>${i.number}</td><td>${fmt(i.amount)} ₫</td><td>${fmt(i.paid)} ₫</td>
+      <td><span class="pill ${i.status === "PAID" ? "ok" : "warn"}">${i.status}</span></td>
+      <td>${i.status !== "PAID" ? `<input id="pay_${i.id}" type="number" style="width:120px" value="${Math.round(i.amount - i.paid)}"> <button class="ghost" onclick="pay(${i.id})">Ghi nhận</button>` : ""}</td></tr>`).join("")
+    || `<tr><td class="muted">Chưa có hóa đơn.</td></tr>`;
+}
+async function pay(id) {
+  await run(async () => {
+    await api("POST", `/api/invoices/${id}/pay`, { amount: Number($("pay_" + id).value) });
+    toast("Đã ghi nhận thanh toán"); loadInvoices();
+  });
+}
+
+window.acceptQuote = acceptQuote; window.move = move; window.schedule = schedule;
+window.restock = restock; window.pay = pay;
+run(loadDash);
+</script>
+</body>
+</html>
