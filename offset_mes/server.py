@@ -65,6 +65,8 @@ route("POST", r"/api/jobs/(\d+)/transition", "transition", "job.write")
 route("POST", r"/api/jobs/(\d+)/schedule", "schedule", "job.write")
 route("POST", r"/api/jobs/(\d+)/steps", "add_step", "job.write")
 route("POST", r"/api/jobs/(\d+)/steps/(\d+)", "set_step", "job.step")
+route("GET", r"/api/jobs/(\d+)/production", "production_logs", "read")
+route("POST", r"/api/jobs/(\d+)/production", "log_production", "job.step")
 # Hóa đơn
 route("GET", r"/api/invoices", "list_invoices", "read")
 route("POST", r"/api/invoices/(\d+)/pay", "pay_invoice", "invoice.pay")
@@ -162,6 +164,15 @@ def _call(service: Service, name: str, args: list, body: dict, query: dict, user
         return service.add_step(args[0], _need(body, "stage"), _need(body, "name"), actor)
     if name == "set_step":
         return service.set_step_done(args[0], args[1], bool(_need(body, "done")), actor)
+    if name == "production_logs":
+        return service.production_logs(args[0])
+    if name == "log_production":
+        mid = body.get("machine_id")
+        return service.log_production(
+            args[0], _need(body, "stage"), _need(body, "good_qty"),
+            body.get("scrap_qty", 0), body.get("downtime_min", 0),
+            int(mid) if mid not in (None, "") else None,
+            body.get("note", ""), actor)
     if name == "list_invoices":
         return service.list_invoices()
     if name == "pay_invoice":

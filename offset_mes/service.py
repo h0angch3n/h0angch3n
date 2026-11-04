@@ -127,6 +127,18 @@ CREATE TABLE IF NOT EXISTS job_events (
     actor TEXT,
     at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS production_logs (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL REFERENCES jobs(id),
+    stage TEXT NOT NULL,
+    machine_id INTEGER REFERENCES machines(id),
+    good_qty INTEGER NOT NULL DEFAULT 0,
+    scrap_qty INTEGER NOT NULL DEFAULT 0,
+    downtime_min INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    actor TEXT,
+    at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS invoices (
     id INTEGER PRIMARY KEY,
     job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id),
@@ -515,6 +527,7 @@ class Service:
             job = self._hydrate_job(self._one("SELECT * FROM jobs WHERE id = ?", (job_id,)))
             job["steps"] = self._steps(job_id)
             job["progress"] = self._progress(job["steps"])
+            job["output"] = self.output_summary(job)
             job["events"] = self._all(
                 "SELECT * FROM job_events WHERE job_id = ? ORDER BY id", (job_id,))
             job["invoice"] = self.db.execute(
@@ -667,6 +680,59 @@ class Service:
                 self.db.rollback()
                 raise
             return self.get_job(job_id)
+
+    # ---- sản lượng thực tế ---------------------------------------------
+    def log_production(self, job_id: int, stage: str, good_qty: int, scrap_qty: int = 0,
+                       downtime_min: int = 0, machine_id: int | None = None,
+                       note: str = "", actor: str = "system") -> dict:
+        """Ghi nhận sản lượng đạt, phế phẩm, thời gian dừng máy của một công đoạn."""
+        with self.lock:
+            job = self._one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            self._ensure_open(job)
+            if stage not in TEMPLATE_STAGES:
+                raise DomainError(f"Công đoạn không hợp lệ: {stage}")
+            try:
+                good, scrap, down = int(good_qty), int(scrap_qty), int(downtime_min)
+            except (TypeError, ValueError) as exc:
+                raise DomainError("Số lượng phải là số nguyên") from exc
+            if good < 0 or scrap < 0 or down < 0 or (good == 0 and scrap == 0 and down == 0):
+                raise DomainError("Số liệu phải ≥ 0 và phải có ít nhất một giá trị khác 0")
+            if machine_id is not None:
+                self._one("SELECT id FROM machines WHERE id = ?", (int(machine_id),))
+            now = _iso(_now())
+            self._write(
+                "INSERT INTO production_logs (job_id, stage, machine_id, good_qty, scrap_qty,"
+                " downtime_min, note, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (job_id, stage, machine_id, good, scrap, down, note, actor, now))
+            return self.get_job(job_id)
+
+    def production_logs(self, job_id: int) -> list[dict]:
+        with self.lock:
+            self._one("SELECT id FROM jobs WHERE id = ?", (job_id,))
+            return self._all(
+                "SELECT l.*, m.name AS machine_name FROM production_logs l"
+                " LEFT JOIN machines m ON m.id = l.machine_id"
+                " WHERE l.job_id = ? ORDER BY l.id", (job_id,))
+
+    def output_summary(self, job: dict) -> dict:
+        """Tổng hợp sản lượng so với kế hoạch (số lượng đặt và định mức phế phẩm)."""
+        row = self._one(
+            "SELECT COALESCE(SUM(good_qty), 0) AS good, COALESCE(SUM(scrap_qty), 0) AS scrap,"
+            " COALESCE(SUM(downtime_min), 0) AS downtime FROM production_logs WHERE job_id = ?",
+            (job["id"],))
+        planned = int(job["params"]["quantity"])
+        good, scrap = int(row["good"]), int(row["scrap"])
+        planned_waste = job["result"]["waste_sheets"]
+        return {
+            "planned_qty": planned,
+            "good_qty": good,
+            "scrap_qty": scrap,
+            "remaining_qty": max(0, planned - good),
+            "percent": round(100 * min(good, planned) / planned) if planned else 100,
+            "scrap_pct": round(100 * scrap / (good + scrap), 2) if good + scrap else 0.0,
+            "planned_waste_sheets": planned_waste,
+            "downtime_min": int(row["downtime"]),
+        }
 
     # ---- hóa đơn & công nợ --------------------------------------------
     def pay_invoice(self, invoice_id: int, amount: float, actor: str = "system") -> dict:

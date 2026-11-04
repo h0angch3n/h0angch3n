@@ -121,6 +121,15 @@ Mỗi đơn có một **danh sách bước** (checklist) sinh từ *mẫu tiến
 6. Bỏ tick nhầm: bấm lại vào ô đã tick. Thao tác này cũng được ghi vào nhật ký.
 7. Cuối màn hình có **Nhật ký** ghi lại mọi thay đổi: ai làm gì, lúc nào, chuyển từ trạng thái nào.
 
+### Ghi nhận sản lượng thực tế
+Trong màn hình **Tiến trình** của đơn, mục *Sản lượng thực tế*:
+1. Chọn công đoạn đang làm, nhập số cái **đạt**, số cái **phế**, số phút **dừng máy** và máy đã dùng.
+2. Ghi chú nếu cần, rồi bấm **Ghi nhận**. Có thể ghi nhiều lần trong ngày; hệ thống cộng dồn.
+3. Phần tóm tắt cho biết: đã đạt bao nhiêu so với số lượng đặt, còn lại bao nhiêu, tỷ lệ phế, tổng thời gian dừng máy,
+   và hao hụt tờ dự kiến trong báo giá để so sánh.
+
+Mỗi lần ghi được lưu kèm người nhập và thời điểm. Không ghi được khi đơn đã đóng hoặc đã hủy.
+
 ### Sửa mẫu tiến trình (quản trị viên)
 Tab **Quy trình**:
 - Đổi công đoạn hoặc tên bước trực tiếp trong bảng.

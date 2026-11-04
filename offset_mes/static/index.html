@@ -408,6 +408,8 @@ async function openJob(id) {
     const byStage = {};
     j.steps.forEach(s => (byStage[s.stage] = byStage[s.stage] || []).push(s));
     const closed = ["CLOSED", "CANCELLED"].includes(j.status);
+    const machines = await api("GET", "/api/machines");
+    const machineOpts = machines.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join("");
     const stepsHtml = Object.keys(byStage).length ? Object.entries(byStage).map(([stage, list]) => {
       const current = stage === j.status;
       return `<h4 style="margin:12px 0 4px">${stage} ${current ? '<span class="pill ok">đang ở đây</span>' : ""}</h4>` +
@@ -430,6 +432,19 @@ async function openJob(id) {
         <select id="st_stage">${STAGES.map(s => `<option ${s === j.status ? "selected" : ""}>${s}</option>`).join("")}</select>
         <input id="st_name" placeholder="Bước riêng (vd: đóng dấu logo khách)" style="flex:1;min-width:220px">
         <button class="ghost" onclick="addStep(${j.id})">+ Thêm bước</button></div>`}
+      <h4 style="margin:16px 0 6px">Sản lượng thực tế</h4>
+      <p class="muted">Đạt ${fmt(j.output.good_qty)} / ${fmt(j.output.planned_qty)} cái (${j.output.percent}%)
+        · còn lại ${fmt(j.output.remaining_qty)} · phế ${fmt(j.output.scrap_qty)} (${j.output.scrap_pct}%)
+        · dừng máy ${j.output.downtime_min} phút · hao hụt dự kiến ${j.output.planned_waste_sheets} tờ</p>
+      <div class="bar" style="margin-bottom:10px"><i style="width:${j.output.percent}%"></i></div>
+      ${closed ? "" : `<div class="row">
+        <label>Công đoạn<select id="pl_stage">${STAGES.map(s => `<option ${s === j.status ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+        <label>Đạt (cái)<input id="pl_good" type="number" min="0" value="0" style="width:110px"></label>
+        <label>Phế (cái)<input id="pl_scrap" type="number" min="0" value="0" style="width:90px"></label>
+        <label>Dừng máy (phút)<input id="pl_down" type="number" min="0" value="0" style="width:110px"></label>
+        <label>Máy<select id="pl_machine"><option value="">—</option>${machineOpts}</select></label>
+        <label style="flex:1;min-width:160px">Ghi chú<input id="pl_note"></label>
+        <button class="act" onclick="logProd(${j.id})">Ghi nhận</button></div>`}
       <h4 style="margin:16px 0 6px">Nhật ký</h4>
       <div class="scroll"><table>${j.events.slice().reverse().map(e =>
         `<tr><td class="muted">${short(e.at)}</td><td>${esc(e.actor || "")}</td><td>${esc(e.note || "")}</td><td>${e.from_status || ""} → ${e.to_status}</td></tr>`).join("")}</table></div>`;
@@ -441,6 +456,18 @@ async function toggleStep(jobId, stepId, done) {
   await run(async () => {
     await api("POST", `/api/jobs/${jobId}/steps/${stepId}`, { done });
     loadJobs(); openJob(jobId);
+  });
+}
+async function logProd(jobId) {
+  await run(async () => {
+    const good = Number($("pl_good").value), scrap = Number($("pl_scrap").value), down = Number($("pl_down").value);
+    if (!good && !scrap && !down) throw new Error("Nhập số liệu sản lượng, phế hoặc dừng máy");
+    await api("POST", `/api/jobs/${jobId}/production`, {
+      stage: $("pl_stage").value, good_qty: good, scrap_qty: scrap, downtime_min: down,
+      machine_id: $("pl_machine").value ? Number($("pl_machine").value) : null,
+      note: $("pl_note").value.trim(),
+    });
+    toast("Đã ghi nhận sản lượng"); loadJobs(); openJob(jobId);
   });
 }
 async function addStep(jobId) {
@@ -568,7 +595,7 @@ $("btnAddUser").onclick = () => run(async () => {
 
 window.acceptQuote = acceptQuote; window.move = move; window.schedule = schedule;
 window.restock = restock; window.pay = pay; window.openJob = openJob; window.closeJob = closeJob;
-window.toggleStep = toggleStep; window.addStep = addStep; window.tplRemove = tplRemove;
+window.toggleStep = toggleStep; window.addStep = addStep; window.logProd = logProd; window.tplRemove = tplRemove;
 window.updUser = updUser; window.resetPass = resetPass;
 
 (async () => {

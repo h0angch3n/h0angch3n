@@ -76,6 +76,7 @@ Tất cả route (trừ `/api/setup-status`, `/api/setup`, `/api/login`) cần h
 | POST | `/api/quotes/estimate`, `/api/quotes`, `/api/quotes/{id}/accept` | SALES, MANAGER, ADMIN |
 | GET | `/api/jobs`, `/api/jobs/{id}` (có `steps`, `progress`, `events`) | mọi người |
 | POST | `/api/jobs/{id}/transition`, `/schedule`, `/steps` | OPERATOR trở lên |
+| GET/POST | `/api/jobs/{id}/production` | đọc: mọi người · ghi: OPERATOR trở lên |
 | POST | `/api/jobs/{id}/steps/{step_id}` `{"done": true}` | OPERATOR trở lên |
 | POST | `/api/invoices/{id}/pay` | ACCOUNTANT, MANAGER, ADMIN |
 | GET | `/api/dashboard`, `/api/invoices`, `/api/quotes` | mọi người |
@@ -86,7 +87,7 @@ Mã lỗi: 401 chưa đăng nhập · 403 không đủ quyền · 404 không tì
 
 1. **Prepress:** nhận file PDF, kiểm tra độ phân giải/màu/tràn mép, duyệt proof trực tuyến cho khách.
 2. **Kho mực & bản kẽm:** định mức mực theo diện tích phủ; theo dõi tồn bản kẽm và tái sử dụng bản lặp.
-3. **Ghi nhận sản lượng thực tế theo máy:** số tờ chạy, phế phẩm, thời gian dừng máy; so với định mức.
+3. **Ghi nhận sản lượng thực tế (đã có cơ bản):** cần thêm đối chiếu với định mức theo máy và báo cáo hiệu suất.
 4. **Tiến trình nâng cao:** mẫu theo loại sản phẩm (danh thiếp, tờ rơi, sách…), ghi nhận người phụ trách từng công đoạn.
 5. **Tích hợp:** xuất hóa đơn điện tử, cổng khách hàng theo dõi đơn, xuất dữ liệu kế toán.
 6. **Bảo mật nâng cao:** HTTPS nội bộ, buộc đổi mật khẩu lần đầu, nhật ký đăng nhập, sao lưu tự động.
