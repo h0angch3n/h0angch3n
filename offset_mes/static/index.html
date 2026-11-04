@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offset MES</title>
+<link rel="icon" href="data:,">
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; }
   @media (prefers-color-scheme: dark) {
@@ -39,6 +40,7 @@
   .bar > i { display:block; height:100%; background:var(--ok); }
   .muted { color:var(--muted); }
   .scroll { overflow-x:auto; }
+  .scroll > table { min-width:620px; }
   .step { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid var(--line); }
   .step.done span.name { text-decoration:line-through; color:var(--muted); }
   #msg { position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:8px; display:none; max-width:360px; z-index:20; }
