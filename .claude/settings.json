@@ -58,6 +58,7 @@
     "example-skills@anthropic-agent-skills": true,
     "claude-api@anthropic-agent-skills": true,
     "academy-guide@anthropic-agent-skills": true,
-    "discernment-nudge@anthropic-agent-skills": true
+    "discernment-nudge@anthropic-agent-skills": true,
+    "mcp-apps@claude-plugins-official": true
   }
 }
