@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Projeck — máy chủ quản lý dự án & giao việc cho công ty lập trình.
+"""Projeck — máy chủ quản lý dự án & giao việc của Công ty Cổ phần Dịch vụ Dev.
 
 Chỉ dùng thư viện chuẩn Python 3.9+ và SQLite, không cần cài thêm gói.
 
@@ -84,11 +84,11 @@ ROLLOUT_TASKS = [
     ("Cài đặt và chạy máy chủ Projeck", "high", "done", 0, 1,
      "Đã xong khi bạn thấy màn hình này. Máy chạy server.py cần bật trong giờ làm việc."),
     ("Rà soát danh sách bộ phận cho đúng công ty", "high", "todo", 1, 1,
-     "Tab Bộ phận: sửa tên, xóa bộ phận không có, thêm bộ phận còn thiếu."),
+     "Tab Cơ cấu tổ chức: sửa tên, xóa bộ phận không có, thêm bộ phận còn thiếu."),
     ("Tạo tài khoản cho trưởng bộ phận và quản lý dự án", "high", "todo", 2, 2,
      "Tab Nhân sự: mỗi người một tên đăng nhập, mật khẩu tạm, đúng bộ phận và vai trò. "
      "Gửi riêng cho từng người, nhắc đổi mật khẩu ở lần đăng nhập đầu."),
-    ("Bổ nhiệm trưởng bộ phận trong tab Bộ phận", "normal", "todo", 2, 0.5,
+    ("Bổ nhiệm trưởng bộ phận trong tab Cơ cấu tổ chức", "normal", "todo", 2, 0.5,
      "Trưởng bộ phận nhận thông báo duyệt việc của nhân viên trong bộ phận."),
     ("Tạo tài khoản cho toàn bộ nhân viên", "normal", "todo", 4, 2,
      "Có thể giao cho Nhân sự (HR) nếu đã cấp quyền Quản trị cho HR."),
