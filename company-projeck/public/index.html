@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Projeck — Công ty Cổ phần Dịch vụ Dev</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="logged-out">
+  <header class="topbar">
+    <div class="brand"><span id="company">Công ty Cổ phần Dịch vụ Dev</span><small>Projeck · Quản lý dự án &amp; giao việc</small></div>
+    <nav id="nav" aria-label="Điều hướng chính">
+      <a href="#mine">Việc của tôi</a>
+      <a href="#overview">Tổng quan</a>
+      <a href="#board">Công việc</a>
+      <a href="#projects">Dự án</a>
+      <a href="#people">Nhân sự</a>
+      <a href="#depts">Cơ cấu tổ chức</a>
+    </nav>
+    <div class="tools" id="userbox"></div>
+  </header>
+
+  <main id="app"><p class="muted">Đang tải…</p></main>
+  <div id="notif" class="notif-panel" hidden></div>
+  <dialog id="dlg" aria-label="Chi tiết"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

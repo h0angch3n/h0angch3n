@@ -1,3 +1,18 @@
+# Công ty Cổ phần Dịch vụ Dev — kho mã nguồn
+
+Kho này chứa hai sản phẩm độc lập:
+
+| Thư mục | Sản phẩm | Dùng cho |
+|---|---|---|
+| [`company-projeck/`](company-projeck/README.md) | **Projeck** — quản lý dự án & giao việc nội bộ | Vận hành Công ty Cổ phần Dịch vụ Dev: cơ cấu công ty cổ phần, phân quyền, giao việc, duyệt kết quả |
+| `offset_mes/` (tài liệu bên dưới) | **Offset MES** — ERP sản xuất cho xưởng in offset | Sản phẩm phần mềm làm cho khách hàng ngành in |
+
+Hai sản phẩm không dùng chung mã hay dữ liệu, đều chỉ cần Python 3 và SQLite.
+Hướng dẫn triển khai Projeck: [company-projeck/docs/HUONG_DAN_TRIEN_KHAI.md](company-projeck/docs/HUONG_DAN_TRIEN_KHAI.md) ·
+Quy trình giao việc: [company-projeck/docs/QUY_TRINH_GIAO_VIEC.md](company-projeck/docs/QUY_TRINH_GIAO_VIEC.md).
+
+---
+
 # Offset MES — ERP sản xuất thu nhỏ toàn trình cho xưởng in offset
 
 Phần mềm chạy trên PC cho xưởng in offset vừa và nhỏ: đi từ **báo giá → đơn hàng → tiến trình sản xuất
