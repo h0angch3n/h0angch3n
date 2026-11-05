@@ -14,12 +14,24 @@ triển khai, bảo trì và hỗ trợ sau bán hàng.
 ```
 .
 ├── README.md                    trang giới thiệu công ty (tài liệu này)
+├── CLAUDE.md                    luật làm việc của đội AI
+├── docs/SO_TAY_CONG_TY_AI.md    sổ tay giao việc cho đội AI (dành cho người)
+├── .claude/                     các AI chuyên môn và lệnh /giao-viec
 ├── company-projeck/             hệ thống nội bộ của công ty
 │   ├── server.py, public/       phần mềm Projeck
 │   └── docs/                    hướng dẫn triển khai, quy trình giao việc
 └── du-an-khach-hang/            các dự án làm cho khách hàng
     └── offset-mes/              phần mềm cho khách hàng ngành in offset
 ```
+
+## Đội AI làm việc
+
+Công ty vận hành theo mô hình **người giao việc và phê duyệt, đội AI thực hiện**. Gõ `/giao-viec <việc cần làm>`
+trong Claude: AI Điều phối lập kế hoạch, rồi các AI Phân tích, Lập trình, Kiểm thử, Rà soát phối hợp với nhau.
+Người giao việc chỉ duyệt hai lần: kế hoạch và kết quả.
+
+- Hướng dẫn cho người: [docs/SO_TAY_CONG_TY_AI.md](docs/SO_TAY_CONG_TY_AI.md)
+- Luật cho AI: [CLAUDE.md](CLAUDE.md)
 
 ## Cơ cấu tổ chức
 
